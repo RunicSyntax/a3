@@ -100,6 +100,7 @@ void solve_port(const char* ip, int port, int challenge_num, char message[], siz
 
             // Extract expected checksum from the response
             uint16_t expected_checksum = (last_six[0] << 8) | last_six[1];
+            expected_checksum = ntohs(expected_checksum);
 
             // Extract source IP from the response
             uint32_t source_ip;
@@ -115,29 +116,33 @@ void solve_port(const char* ip, int port, int challenge_num, char message[], siz
             iph->tos = 0;
             iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr));
             iph->id = htons(5500);
-            iph->frag_off = 0;
+            iph->frag_off = htons(0);
             iph->ttl = 64;
             iph->protocol = IPPROTO_UDP;
             iph->check = 0;
-            iph->saddr = source_ip;  // Source IP is already in network byte order
-            iph->daddr = inet_addr(ip);  // Destination IP in network byte order
+            iph->saddr = source_ip;  
+            iph->daddr = inet_addr(ip);
 
             // Calculate IP header checksum
             iph->check = calculate_checksum((unsigned short *)iph, sizeof(struct iphdr) / 2);
 
+            // Declare sample source_port
+            uint16_t source_port;
+
             // Create UDP header
             struct udphdr *udph = (struct udphdr *) (package + sizeof(struct iphdr));
+            udph->source = htons(source_port);
             udph->dest = htons(port);
             udph->len = htons(sizeof(struct udphdr));
             udph->check = 0;
 
             // Set up the pseudo-header
             struct pseudo_header psh;
-            psh.source_address = source_ip;
-            psh.destination_address = inet_addr(ip);
+            psh.source_address = iph->saddr;
+            psh.destination_address = iph->daddr;
             psh.placeholder = 0;
             psh.protocol = IPPROTO_UDP;
-            psh.udp_length = htons(sizeof(struct udphdr));
+            psh.udp_length = udph->len;
 
             // Prepare buffer for checksum calculation
             int pseudo_packet_size = sizeof(struct pseudo_header) + sizeof(struct udphdr);
@@ -146,9 +151,8 @@ void solve_port(const char* ip, int port, int challenge_num, char message[], siz
             memcpy(pseudo_packet + sizeof(struct pseudo_header), udph, sizeof(struct udphdr));
 
             // Adjust the source port to match the expected checksum
-            uint16_t source_port;
             bool checksum_matched = false;
-            for (source_port = 10000; source_port < 65535; source_port++) {
+            for (source_port = 0; source_port < 65535; source_port++) {
                 udph->source = htons(source_port);
 
                 // Recalculate UDP checksum
@@ -156,7 +160,7 @@ void solve_port(const char* ip, int port, int challenge_num, char message[], siz
                 uint16_t calculated_checksum = calculate_checksum((unsigned short *)pseudo_packet, pseudo_packet_size / 2);
 
                 if (calculated_checksum == expected_checksum) {
-                    udph->check = htons(calculated_checksum);
+                    udph->check = calculated_checksum;
                     checksum_matched = true;
                     break;
                 }
@@ -169,8 +173,8 @@ void solve_port(const char* ip, int port, int challenge_num, char message[], siz
             }
 
             // Send the packet
-            struct sockaddr_in dest_addr = addr;  // Copy destination address
-            dest_addr.sin_port = udph->dest;      // Ensure destination port is set
+            struct sockaddr_in dest_addr = addr;
+            dest_addr.sin_port = udph->dest;
 
             int package_size = sizeof(struct iphdr) + sizeof(struct udphdr);
             int send_result = sendto(sock, package, package_size, 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
@@ -189,108 +193,14 @@ void solve_port(const char* ip, int port, int challenge_num, char message[], siz
                 int length = recvfrom(sock, second_buffer, sizeof(second_buffer) - 1, 0, nullptr, nullptr);
                 if (length >= 0) {
                     second_buffer[length] = '\0';  // Null-terminate the received message
-                    std::cout << "Response to custom reply: " << second_buffer << std::endl;
+                    std::cout << "Reply: " << second_buffer << std::endl;
                 } else {
-                    perror("Failed to receive response to custom reply");
+                    perror("Failed to receive reply");
                 }
             } else {
-                std::cout << "No response received to custom reply." << std::endl;
+                std::cout << "Failed to receive reply" << std::endl;
             }
         }
-
-
-        /*
-        if (challenge_num == 2){
-
-          const unsigned char *last_six = (unsigned char *)(buffer + len - 6);
-
-          // UDP checksum
-          uint16_t expected_checksum = (last_six[0] << 8) | last_six[1];
-
-          // Source IP 
-          uint32_t source_ip = 0;
-          std::memcpy(&source_ip, last_six + 2, 4);
-
-          char package[30];
-          memset(package, 0, sizeof(package));
-          
-          // Designate data length
-          //uint16_t data_len = 2;
-
-          // Make the IP header
-          struct iphdr* iph = (struct iphdr*) package;
-
-          int source_port = 12345;
-
-          // Fill in IP header information
-          iph->ihl = 5;
-          iph->version = 4;
-          iph->tos = 0;
-          iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr));
-          iph->id = htons(5500);
-          iph->frag_off = 0;
-          iph->ttl = 64;
-          iph->protocol = IPPROTO_UDP;
-          iph->check = 0;
-          iph->saddr = htonl(source_ip);
-          iph->daddr = htonl(inet_addr(ip));
-
-
-          iph->check = calculate_checksum((unsigned short *)&iph, sizeof(struct iphdr) / 2);
-
-          // Make the UDP header
-          struct udphdr *udph = (struct udphdr *) (package + sizeof(struct iphdr));
-
-          // Fill in UDP header information
-          udph->source = htons(source_port);
-          udph->dest = htons(port);
-          udph->len = htons(sizeof(struct udphdr));
-          udph->check = 0;
-
-          // Define data pointer for checksum modification
-          //uint16_t *data = (uint16_t *)(package + sizeof(struct iphdr) + sizeof(struct udphdr));
-          //k*data = 0;
-
-          // Pseudo-header for checksum calculation
-          struct pseudo_header psh;
-          psh.source_address = htonl(source_ip);
-          psh.destination_address = htonl(inet_addr(ip));
-          psh.placeholder = 0;
-          psh.protocol = IPPROTO_UDP;
-          psh.udp_length = htons(sizeof(struct udphdr));
-
-          // Buffer for pseudo-header + UDP packet
-          u_char pseudo_packet[30];
-          memcpy(pseudo_packet, &psh, sizeof(struct pseudo_header));
-          memcpy(pseudo_packet + sizeof(struct pseudo_header), udph, sizeof(struct udphdr));
-          
-          unsigned short initial_udp_checksum = calculate_checksum(&psh, &udph, nullptr, 0);
-
-          short checksum_difference = expected_checksum - initial_udp_checksum;
-
-          source_port += checksum_difference / 2;
-          udph->source = htons(source_port);
-          
-          udph->check = htons(expected_checksum);
-
-          int package_size = sizeof(struct iphdr) + sizeof(struct udphdr);
-
-          int send = sendto(sock, package, package_size, 0, (struct sockaddr*)&addr, sizeof(addr));
-
-          FD_ZERO(&fds);
-          FD_SET(sock, &fds);
-          timeout.tv_sec = 1;
-          timeout.tv_usec = 0;
-          second_response = select(sock + 1, &fds, nullptr, nullptr, &timeout);
-
-          int length = recvfrom(sock, second_buffer, sizeof(second_buffer) - 1, 0, nullptr, nullptr);
-          if (length >= 0) {
-              second_buffer[length] = '\0';  // Null-terminate the received message
-              std::cout << "Response to custom reply: " << second_buffer << std::endl;
-          } else {
-              perror("Failed to receive response to custom reply");
-          }
-        }*/
       }
     } else {
       // Port sends no response within timeout
